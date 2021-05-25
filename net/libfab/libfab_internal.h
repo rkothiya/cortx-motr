@@ -63,7 +63,7 @@ enum m0_fab__libfab_params {
 	/** Max number of IOV in read/write command (max number of segments) */
 	FAB_IOV_MAX              = 256,
 	/** Max segment size for bulk buffers (4k but can be increased) */
-	FAB_MAX_BULK_SEG_SIZE    = 4096,
+	FAB_MAX_BULK_SEG_SIZE    = 128*1024,
 	/** 
 	 * Max buffer size = FAB_IOV_MAX x FAB_MAX_SEG_SIZE 
 	 * (1MB but can be increased)
