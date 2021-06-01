@@ -246,7 +246,7 @@ object_io_test()
 	blk_size="1m"
 	blk_count="16"
 	src_file="$SANITY_SANDBOX_DIR/src_1M"
-	dest_file="$SANITY_SANDBOX_DIRtmp/dest"
+	dest_file="$SANITY_SANDBOX_DIR/dest"
         echo $blk_size $blk_count
 	dd if="/dev/urandom" of=$src_file bs=$blk_size_dd count=$blk_count || {
 		error_handling "dd command failed" $?

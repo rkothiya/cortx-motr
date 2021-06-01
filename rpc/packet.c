@@ -463,14 +463,20 @@ M0_INTERNAL int m0_rpc_packet_decode_using_cursor(struct m0_rpc_packet *p,
 	if (rc != 0)
 		return M0_RC(rc);
 	if (poh.poh_version != M0_RPC_VERSION_1 || poh.poh_nr_items == 0 ||
-	    poh.poh_magic != M0_RPC_PACKET_HEAD_MAGIC)
+	    poh.poh_magic != M0_RPC_PACKET_HEAD_MAGIC) {
+		M0_LOG(M0_ALWAYS, "1Packet decode version = %d items = %d magic = %"PRIx64, 
+		poh.poh_version, poh.poh_nr_items, poh.poh_magic);
 		return M0_RC(-EPROTO);
+	    }
 
 	/* check version compatibility. */
 	m0_format_header_unpack(&rpc_t, &poh.poh_header);
 	if (rpc_t.ot_version != M0_RPC_PACKET_FORMAT_VERSION ||
-	    rpc_t.ot_type != M0_FORMAT_TYPE_RPC_PACKET)
+	    rpc_t.ot_type != M0_FORMAT_TYPE_RPC_PACKET) {
+		M0_LOG(M0_ALWAYS, "2Packet decode version = %d type  = %d ", 
+		(int )rpc_t.ot_version, (int )rpc_t.ot_type);
 		return M0_RC(-EPROTO);
+	}
 
 	/*
 	 * p->rp_ow.poh_{version,magic} are initialized in m0_rpc_packet_init().
@@ -483,6 +489,7 @@ M0_INTERNAL int m0_rpc_packet_decode_using_cursor(struct m0_rpc_packet *p,
 		rc = item_decode(cursor, &item);
 		if (item == NULL) {
 			/* Here fop is not allocated, no need to release it. */
+			M0_LOG(M0_ALWAYS, "Here 11");
 			return M0_ERR(rc);
 		} else if (rc != 0) {
 			struct m0_fop *fop = m0_rpc_item_to_fop(item);
@@ -495,6 +502,7 @@ M0_INTERNAL int m0_rpc_packet_decode_using_cursor(struct m0_rpc_packet *p,
 			 * explicit m0_ref_put(). */
 			M0_ASSERT(count == 1);
 			m0_ref_put(&fop->f_ref);
+			M0_LOG(M0_ALWAYS, "Here 12");
 
 			return M0_ERR(rc);
 		}
@@ -508,8 +516,11 @@ M0_INTERNAL int m0_rpc_packet_decode_using_cursor(struct m0_rpc_packet *p,
 	if (rc == 0)
 		rc = m0_format_footer_verify_generic(&pof.pof_footer, NULL, 0,
 						     false);
-	if (rc != 0)
+	if (rc != 0) {
+		M0_LOG(M0_ALWAYS, "Here 13");
+
 		return M0_ERR(rc);
+	}
 	m0_bufvec_cursor_align(cursor, 8);
 
 	/* assert the decoded packet has the same number of items and size */

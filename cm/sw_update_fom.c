@@ -119,7 +119,8 @@ static int cm_swu_fom_tick(struct m0_fom *fom)
 	m0_cm_lock(cm);
 	rc = swu_action[phase](swu);
 	if (rc != 0) {
-		M0_LOG(M0_ERROR, "SWU phase=%d rc=%d.", phase, rc);
+		if (rc != -105)
+			M0_LOG(M0_ERROR, "SWU phase=%d rc=%d.", phase, rc);
 		m0_cm_sw_remote_update(cm);
 	}
 	if (rc < 0) {

@@ -61,9 +61,9 @@ enum m0_fab__libfab_params {
 	/** Key used for memory registration. */
 	FAB_MR_KEY               = 0xABCD,
 	/** Max number of IOV in read/write command (max number of segments) */
-	FAB_IOV_MAX              = 256,
+	FAB_IOV_MAX              = 64,
 	/** Max segment size for bulk buffers (4k but can be increased) */
-	FAB_MAX_BULK_SEG_SIZE    = 4096,
+	FAB_MAX_BULK_SEG_SIZE    = (128 * 1024), //4096,
 	/** 
 	 * Max buffer size = FAB_IOV_MAX x FAB_MAX_SEG_SIZE 
 	 * (1MB but can be increased)
@@ -125,6 +125,15 @@ enum m0_fab__buf_state {
 enum m0_fab__event_type {
 	FAB_COMMON_Q_EVENT,
 	FAB_PRIVATE_Q_EVENT
+};
+
+/**
+ * Represents the interface type in the endpoint name
+ */
+enum m0_fab__ep_iface {
+	FAB_LO,
+	FAB_TCP,
+	FAB_O2IB
 };
 
 /**
@@ -270,6 +279,9 @@ struct m0_fab__ep {
 	
 	/** List of buffers to send after connection establishment*/
 	struct m0_tl               fep_sndbuf;
+
+	/**  */
+	uint8_t                    fep_ready;
 };
 
 /**
@@ -399,6 +411,9 @@ struct m0_fab__buf {
 
 	/** State of the buffer */
 	volatile enum m0_fab__buf_state  fb_state;
+	
+	/** Token used for passive recv buffer */
+	uint32_t                         fb_token;
 };
 
 /**
@@ -408,8 +423,14 @@ struct m0_fab__conn_data {
 	/** address in network byte format */
 	uint64_t fcd_netaddr;
 	
-	/** address in string format */
-	char     fcd_straddr[LIBFAB_ADDR_STRLEN_MAX];
+	/** portal number */
+	uint16_t fcd_portal;
+	
+	/** transfer machine id */
+	uint16_t fcd_tmid;
+	
+	/** interface type */
+	uint8_t  fcd_iface;
 };
 
 /**
