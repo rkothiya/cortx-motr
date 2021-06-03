@@ -1229,7 +1229,7 @@ static int libfab_active_ep_create(struct m0_fab__ep *ep, struct m0_fab__tm *tm)
 	
 	return M0_RC(rc);
 }
-
+int g_cnt = 0;
 /**
  * Used to create a passive endpoint which will
  * listen for incoming connection requests. (Server)
@@ -1290,6 +1290,11 @@ static int libfab_passive_ep_create(struct m0_fab__ep *ep,
 	}
 
 	M0_ASSERT(i < ARRAY_SIZE(providers));
+       if (g_cnt == 0) {
+               M0_LOG(M0_ALWAYS, "Provider selected %s", fi->fabric_attr->prov_name);
+               g_cnt = 1 ;
+       }
+ 
 	hints->fabric_attr->prov_name = NULL;
 	tm->ftm_fab->fab_fi = fi;
 	fi_freeinfo(hints);
