@@ -160,8 +160,7 @@ static uint32_t libfab_wr_cnt_get(struct m0_fab__buf *fb);
 static void libfab_bulk_buf_process(struct m0_fab__tm *tm);
 static uint32_t libfab_buf_token_get(void);
 
-/* libfab init and fini() : initialized in motr init */
-M0_INTERNAL int m0_net_libfab_init(void)
+static void libfag_get_local_ip(void)
 {
 	struct fi_info *hints;
 	struct fi_info *fi;
@@ -169,7 +168,7 @@ M0_INTERNAL int m0_net_libfab_init(void)
 
 	hints = fi_allocinfo();
 	if( hints == NULL)
-		return M0_ERR(-ENOMEM);
+		return;
 	hints->fabric_attr->prov_name = providers[0];
 	result = fi_getinfo(FI_VERSION(1,11), NULL, NULL, 0, hints, &fi);
 	if(result == FI_SUCCESS)
@@ -179,12 +178,37 @@ M0_INTERNAL int m0_net_libfab_init(void)
 	else
 		strcpy(local_ip, "127.0.0.1");
 
-	m0_net_xprt_register(&m0_net_libfab_xprt);
-	m0_net_xprt_default_set(&m0_net_libfab_xprt);
-
 	hints->fabric_attr->prov_name = NULL;
 	fi_freeinfo(hints);
 	fi_freeinfo(fi);
+
+
+}
+/* libfab init and fini() : initialized in motr init */
+M0_INTERNAL int m0_net_libfab_init(void)
+{
+	// struct fi_info *hints;
+	// struct fi_info *fi;
+	// int             result = 0;
+
+	// hints = fi_allocinfo();
+	// if( hints == NULL)
+	// 	return M0_ERR(-ENOMEM);
+	// hints->fabric_attr->prov_name = providers[0];
+	// result = fi_getinfo(FI_VERSION(1,11), NULL, NULL, 0, hints, &fi);
+	// if(result == FI_SUCCESS)
+	// 	inet_ntop(AF_INET,
+	// 		  &((struct sockaddr_in *)fi->src_addr)->sin_addr,
+	// 		  local_ip, 16);
+	// else
+	// 	strcpy(local_ip, "127.0.0.1");
+
+	m0_net_xprt_register(&m0_net_libfab_xprt);
+	m0_net_xprt_default_set(&m0_net_libfab_xprt);
+
+	// hints->fabric_attr->prov_name = NULL;
+	// fi_freeinfo(hints);
+	// fi_freeinfo(fi);
 
 	return M0_RC(0);
 }
@@ -2560,7 +2584,7 @@ static int libfab_dom_init(const struct m0_net_xprt *xprt,
 
 	dom->nd_xprt_private = fab_list;
 	fab_fabs_tlist_init(&fab_list->fl_head);
-
+	libfag_get_local_ip();
 	return M0_RC(0);
 }
 
