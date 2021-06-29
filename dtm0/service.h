@@ -76,6 +76,7 @@ M0_INTERNAL bool m0_dtm0_is_a_persistent_dtm(struct m0_reqh_service *service);
 
 M0_INTERNAL struct m0_dtm0_service *
 m0_dtm0_service_find(const struct m0_reqh *reqh);
+M0_INTERNAL struct m0_dtm0_service *m0_dtm0_fom2service(struct m0_fom *fom);
 
 M0_INTERNAL bool m0_dtm0_in_ut(void);
 

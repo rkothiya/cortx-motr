@@ -1022,34 +1022,27 @@ static void cas_fom_failure(struct cas_fom *fom, int rc, bool ctg_op_fini)
 
 static int cas_dtm0_logrec_credit_add(struct m0_fom *fom0)
 {
-	struct m0_be_tx_credit dtm0logrec_cred = {};
-	struct m0_buf          buf = {};
+	struct m0_be_tx_credit cred = {};
+	struct m0_xcode_ctx    ctx = {};
 	int	               rc;
 
 	M0_ENTRY();
 
-	/*
-	 * TBD: while calculating the credits we need only the
-	 * size of the payload. Check if m0_be_dtm0_log_credit
-	 * needs to be updated to accept a size instead of the
-	 * actual payload.
-	 */
-	rc = m0_xcode_obj_enc_to_buf(
-		&M0_XCODE_OBJ(m0_cas_op_xc, cas_op(fom0)),
-		&buf.b_addr, &buf.b_nob);
-	if (rc == 0) {
-		m0_be_dtm0_log_credit(M0_DTML_PERSISTENT,
-				      &cas_op(fom0)->cg_txd,
-				      &buf,
-				      m0_fom_reqh(fom0)->rh_beseg,
-				      NULL,
-				      &dtm0logrec_cred);
-		m0_be_tx_credit_add(&fom0->fo_tx.tx_betx_cred,
-				    &dtm0logrec_cred);
-		m0_buf_free(&buf);
-	}
+	rc = m0_xcode_data_size(&ctx,
+				&M0_XCODE_OBJ(m0_cas_op_xc, cas_op(fom0)));
+	if (rc < 0)
+		return M0_ERR(rc);
 
-	return M0_RC(rc);
+	M0_ASSERT(rc > 0);
+
+	m0_be_dtm0_log_credit(M0_DTML_PERSISTENT,
+			      &cas_op(fom0)->cg_txd,
+			      &((struct m0_buf) { .b_nob = rc }),
+			      m0_fom_reqh(fom0)->rh_beseg,
+			      NULL, &cred);
+	m0_be_tx_credit_add(&fom0->fo_tx.tx_betx_cred, &cred);
+
+	return M0_RC(0);
 }
 
 static int cas_dtm0_logrec_add(struct m0_fom *fom0,

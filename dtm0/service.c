@@ -141,6 +141,13 @@ static struct m0_dtm0_service *to_dtm(struct m0_reqh_service *service)
 		      &dtm0_service_bob);
 }
 
+M0_INTERNAL struct m0_dtm0_service *m0_dtm0_fom2service(struct m0_fom *fom)
+{
+	struct m0_reqh_service *service = fom->fo_service;
+	M0_PRE(m0_streq(service->rs_type->rst_name, "M0_CST_DTM0"));
+	return to_dtm(service);
+}
+
 /**
  * Service part
  */

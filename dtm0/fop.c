@@ -60,23 +60,26 @@ struct m0_fop_type dtm0_rep_fop_fopt;
 /*
   Fom specific routines for corresponding fops.
  */
-static int dtm0_fom_tick(struct m0_fom *fom);
+static int dtm0_emsg_fom_tick(struct m0_fom *fom);
+static int dtm0_pmsg_fom_tick(struct m0_fom *fom);
 static int dtm0_fom_create(struct m0_fop *fop, struct m0_fom **out,
 			       struct m0_reqh *reqh);
 static void dtm0_fom_fini(struct m0_fom *fom);
 static size_t dtm0_fom_locality(const struct m0_fom *fom);
 
-static const struct m0_fom_ops dtm0_req_fom_ops = {
+static const struct m0_fom_ops dtm0_pmsg_fom_ops = {
 	.fo_fini = dtm0_fom_fini,
-	.fo_tick = dtm0_fom_tick,
+	.fo_tick = dtm0_pmsg_fom_tick,
+	.fo_home_locality = dtm0_fom_locality
+};
+
+static const struct m0_fom_ops dtm0_emsg_fom_ops = {
+	.fo_fini = dtm0_fom_fini,
+	.fo_tick = dtm0_emsg_fom_tick,
 	.fo_home_locality = dtm0_fom_locality
 };
 
 extern struct m0_reqh_service_type dtm0_service_type;
-
-enum dtm0_phases {
-	DTM0_REQ_WHATEVER = M0_FOPH_NR + 1,
-};
 
 static const struct m0_fom_type_ops dtm0_req_fom_type_ops = {
         .fto_create = dtm0_fom_create,
@@ -164,30 +167,6 @@ M0_INTERNAL int m0_dtm0_fop_init(void)
 	return m0_fop_type_addb2_instrument(&dtm0_req_fop_fopt);
 }
 
-/*
-  Allocates a fop.
- */
-
-int m0_dtm0_fop_create(struct m0_rpc_session  *session,
-		       enum m0_dtm0s_msg       opmsg,
-		       struct m0_dtm0_tx_desc *txr,
-		       struct m0_fop         **out)
-{
-	struct dtm0_req_fop *op;
-	struct m0_fop	    *fop;
-
-	*out = NULL;
-
-	fop = m0_fop_alloc_at(session, &dtm0_req_fop_fopt);
-	if (fop == NULL)
-		return M0_ERR(-ENOMEM);
-	op = m0_fop_data(fop);
-	op->dtr_msg = opmsg;
-	op->dtr_txr = *txr;
-	*out = fop;
-	return 0;
-}
-M0_EXPORTED(m0_dtm0_fop_create);
 
 /*
   Allocates a fom.
@@ -199,7 +178,9 @@ static int dtm0_fom_create(struct m0_fop *fop,
 	struct dtm0_fom         *fom;
 	struct m0_fop           *repfop;
 	struct dtm0_rep_fop     *reply;
+	struct dtm0_req_fop     *req;
 	struct m0_dtm0_pmsg_ast *pma;
+	int                      rc;
 
 	M0_ENTRY("reqh=%p", reqh);
 
@@ -221,10 +202,22 @@ static int dtm0_fom_create(struct m0_fop *fop,
 	/* see ::m0_dtm0_dtx_post_persistent for the details */
 	fop->f_opaque = pma;
 	reply = m0_fop_data(repfop);
+	req   = m0_fop_data(fop);
 	reply->dr_txr = (struct m0_dtm0_tx_desc) {};
 	reply->dr_rc = 0;
-	m0_fom_init(&fom->dtf_fom, &fop->f_type->ft_fom_type,
-		    &dtm0_req_fom_ops, fop, repfop, reqh);
+
+	if (req->dtr_msg == DMT_EXECUTE) {
+		M0_ASSERT_INFO(m0_dtm0_in_ut(), "Emsg FOM is only for UTs.");
+		rc = m0_dtm0_tx_desc_copy(&req->dtr_txr, &reply->dr_txr);
+		M0_ASSERT(rc == 0);
+		m0_fom_init(&fom->dtf_fom, &fop->f_type->ft_fom_type,
+			    &dtm0_emsg_fom_ops, fop, repfop, reqh);
+	} else if (req->dtr_msg == DTM_PERSISTENT) {
+		m0_fom_init(&fom->dtf_fom, &fop->f_type->ft_fom_type,
+			    &dtm0_pmsg_fom_ops, fop, repfop, reqh);
+	} else
+		M0_IMPOSSIBLE();
+
 	return M0_RC_INFO(0, "fom=%p", &fom->dtf_fom);
 }
 
@@ -261,14 +254,14 @@ static int m0_dtm0_send_msg(struct m0_fom                *fom,
 M0_INTERNAL int m0_dtm0_logrec_update(struct m0_be_dtm0_log  *log,
 				      struct m0_be_tx        *tx,
 				      struct m0_dtm0_tx_desc *txd,
-				      struct m0_buf          *pyld)
+				      struct m0_buf          *payload)
 {
 	int rc;
 
 	M0_ENTRY();
 
 	m0_mutex_lock(&log->dl_lock);
-	rc = m0_be_dtm0_log_update(log, tx, txd, pyld);
+	rc = m0_be_dtm0_log_update(log, tx, txd, payload);
 	m0_mutex_unlock(&log->dl_lock);
 
 	return M0_RC(rc);
@@ -282,17 +275,13 @@ M0_INTERNAL int m0_dtm0_on_committed(struct m0_fom            *fom,
 	struct m0_be_dtm0_log  *log = dtms->dos_log;
 	struct m0_dtm0_log_rec *rec;
 	struct m0_dtm0_tx_desc  txd;
+	struct m0_fid          *target;
+	struct m0_fid          *source = &dtms->dos_generic.rs_service_fid;
 	int                     rc;
 	int                     i;
 
 	M0_PRE(log != NULL);
-	/*
-	 * TODO: uncomment the following line after the connections code
-	 * is updated to detect and set volatile and persistent dtm0 service
-	 * instances. At present, the all2all test treats all connections as
-	 * volatile.
-	 * M0_PRE(log->dl_is_persistent);
-	 */
+	M0_PRE(log->dl_is_persistent);
 
 	M0_ENTRY();
 
@@ -301,111 +290,125 @@ M0_INTERNAL int m0_dtm0_on_committed(struct m0_fom            *fom,
 	rec = m0_be_dtm0_log_find(log, id);
 	M0_ASSERT_INFO(rec != NULL, "Log record must be inserted into the log "
 		       "in cas_fom_tick().");
-	m0_dtm0_tx_desc_copy(&rec->dlr_txd, &txd);
+	rc = m0_dtm0_tx_desc_copy(&rec->dlr_txd, &txd);
 	m0_mutex_unlock(&log->dl_lock);
 
-	/* Notify the originator */
-	rc = m0_dtm0_send_msg(fom, DTM_PERSISTENT, &txd.dtd_id.dti_fid, &txd);
-
 	if (rc != 0)
-		M0_ERR_INFO(rc, "failed to send PERSISTENT msg to originator "
-			    FID_F" -> " FID_F,
-			    FID_P(&dtms->dos_generic.rs_service_fid),
-			    FID_P(&txd.dtd_ps.dtp_pa->p_fid));
-	/* Send P msgs to the rest of the participants. */
+		goto out;
+
 	for (i = 0; i < txd.dtd_ps.dtp_nr; ++i) {
-		if (m0_fid_eq(&txd.dtd_ps.dtp_pa[i].p_fid,
-			      &dtms->dos_generic.rs_service_fid))
-			continue;
-		rc = m0_dtm0_send_msg(fom, DTM_PERSISTENT,
-				      &txd.dtd_ps.dtp_pa[i].p_fid, &txd);
-		if (rc != 0)
-			M0_ERR_INFO(rc, "failed to send PERSISTENT msg "
-				    FID_F " -> " FID_F,
-				    FID_P(&dtms->dos_generic.rs_service_fid),
-			FID_P(&txd.dtd_ps.dtp_pa[i].p_fid));
+		target = &txd.dtd_ps.dtp_pa[i].p_fid;
+
+		/* Send it to the originator when we encounter ourselves. */
+		if (m0_fid_eq(target, source))
+			target = &txd.dtd_id.dti_fid;
+
+		rc = m0_dtm0_send_msg(fom, DTM_PERSISTENT, target, &txd);
+		if (rc != 0) {
+			M0_ERR_INFO(rc, "Failed to send PERSISTENT msg "
+				    FID_F " -> " FID_F ".",
+				    FID_P(source), FID_P(target));
+			/*
+			 * Pmsg should not cause failures of the CAS/IOS FOM
+			 * that caused it.
+			 */
+			rc = 0;
+		}
 	}
+
 	m0_dtm0_tx_desc_fini(&txd);
 
+out:
 	return M0_RC(rc);
 }
 
-static int dtm0_fom_tick(struct m0_fom *fom)
+static int dtm0_pmsg_fom_tick(struct m0_fom *fom)
 {
-	int                       rc;
 	int                       result = M0_FSO_AGAIN;
 	struct   m0_dtm0_service *svc;
 	struct   m0_buf           buf = {};
 	struct   dtm0_rep_fop    *rep;
 	struct   dtm0_req_fop    *req = m0_fop_data(fom->fo_fop);
 	int                       phase = m0_fom_phase(fom);
+	struct   m0_be_tx_credit  cred = {};
 
+	M0_PRE(req->dtr_msg == DTM_PERSISTENT);
 	M0_ENTRY("fom %p phase %d", fom, phase);
 
 	if (m0_fom_phase(fom) < M0_FOPH_NR) {
 		result = m0_fom_tick_generic(fom);
-		if (req->dtr_msg == DTM_PERSISTENT &&
-		    m0_dtm0_is_a_persistent_dtm(fom->fo_service)) {
-			if (m0_fom_phase(fom) == M0_FOPH_TXN_OPEN) {
-				struct m0_be_tx_credit dtm0logrec_cred = {};
-				M0_ASSERT(phase == M0_FOPH_TXN_INIT);
-				/* get tx credits. */
-				m0_be_dtm0_log_credit(M0_DTML_PERSISTENT,
-						      &req->dtr_txr,
-						      &buf,
-						      m0_fom_reqh(fom)->rh_beseg,
-						      NULL,
-						      &dtm0logrec_cred);
-				m0_be_tx_credit_add(&fom->fo_tx.tx_betx_cred, &dtm0logrec_cred);
-			}
-			/*
-			 * XXX: Find out if we need to wait for the tx to be logged.
-			 */
+		if (m0_dtm0_is_a_persistent_dtm(fom->fo_service) &&
+		    m0_fom_phase(fom) == M0_FOPH_TXN_OPEN) {
+			M0_ASSERT(phase == M0_FOPH_TXN_INIT);
+			m0_be_dtm0_log_credit(M0_DTML_PERSISTENT,
+					      &req->dtr_txr, &buf,
+					      m0_fom_reqh(fom)->rh_beseg,
+					      NULL, &cred);
+			m0_be_tx_credit_add(&fom->fo_tx.tx_betx_cred, &cred);
 		}
 	} else {
-		M0_ASSERT(m0_fom_phase(fom) == M0_FOPH_TYPE_SPECIFIC);
+		M0_ASSERT(m0_fom_phase(fom) == M0_FOPH_DTM0_LOGGING);
 		rep = m0_fop_data(fom->fo_rep_fop);
-		M0_SET0(&rep->dr_txr);
-		svc = m0_dtm0_service_find(fom->fo_service->rs_reqh);
+		svc = m0_dtm0_fom2service(fom);
 		M0_ASSERT(svc != NULL);
 
-		M0_LOG(M0_DEBUG, "Processing non-generic phase %" PRIu32
+		M0_LOG(M0_DEBUG, "Logging a P msg in phase %" PRIu32
 		       " %d, " FID_F ", %p", req->dtr_msg,
 		       !!m0_dtm0_is_a_volatile_dtm(fom->fo_service),
 		       FID_P(&fom->fo_service->rs_service_fid),
 		       fom->fo_service->rs_reqh);
 
-		if (m0_dtm0_in_ut() && req->dtr_msg == DMT_EXECUTE &&
-		    m0_dtm0_is_a_persistent_dtm(fom->fo_service)) {
-			rc = m0_dtm0_tx_desc_copy(&req->dtr_txr, &rep->dr_txr);
-			M0_ASSERT(rc == 0);
-			m0_fom_phase_move(fom, M0_ERR(rc), M0_FOPH_FAILURE);
+		if (m0_dtm0_is_a_volatile_dtm(fom->fo_service)) {
+			/*
+			 * On the client side, DTX is the owner of the log,
+			 * so that it cannot be modifed right here. We have to
+			 * post an AST to ensure DTX is modifed
+			 * under the group lock held.
+			 */
+			m0_be_dtm0_log_pmsg_post(svc->dos_log, fom->fo_fop);
+			rep->dr_rc = 0;
+		} else {
+			rep->dr_rc = m0_dtm0_logrec_update(svc->dos_log,
+							   &fom->fo_tx.tx_betx,
+							   &req->dtr_txr, &buf);
+		}
+
+		/* We do not handle any failures of Pmsg processing. */
+		m0_fom_phase_set(fom, M0_FOPH_SUCCESS);
+		result = M0_FSO_AGAIN;
+	}
+
+	return M0_RC(result);
+}
+
+static int dtm0_emsg_fom_tick(struct m0_fom *fom)
+{
+	int                       rc = 0;
+	int                       result = M0_FSO_AGAIN;
+	struct   dtm0_rep_fop    *rep = m0_fop_data(fom->fo_rep_fop);
+	struct   dtm0_req_fop    *req = m0_fop_data(fom->fo_fop);
+	int                       phase = m0_fom_phase(fom);
+
+	M0_PRE(req->dtr_msg == DMT_EXECUTE);
+	M0_ASSERT_INFO(m0_dtm0_in_ut(), "Emsg cannot be used outside of UT.");
+
+	M0_ENTRY("fom %p phase %d", fom, phase);
+
+	if (m0_fom_phase(fom) < M0_FOPH_NR) {
+		result = m0_fom_tick_generic(fom);
+	} else {
+		M0_ASSERT(m0_fom_phase(fom) == M0_FOPH_DTM0_LOGGING);
+
+		if (m0_dtm0_is_a_persistent_dtm(fom->fo_service))
 			rc = m0_dtm0_send_msg(fom, DMT_EXECUTED,
 					      &req->dtr_txr.dtd_id.dti_fid,
 					      &req->dtr_txr);
-			M0_ASSERT(rc == 0);
-			m0_fom_phase_move(fom, M0_ERR(rc), M0_FOPH_FAILURE);
-		} else if (req->dtr_msg == DTM_PERSISTENT) {
-			if (m0_dtm0_is_a_volatile_dtm(fom->fo_service)) {
-				m0_be_dtm0_log_pmsg_post(svc->dos_log, fom->fo_fop);
-			} else {
-				rc = m0_dtm0_logrec_update(svc->dos_log, &fom->fo_tx.tx_betx, &req->dtr_txr, &buf);
-				if (rc == 0 && m0_dtm0_in_ut()) {
-					rc = m0_dtm0_tx_desc_copy(&req->dtr_txr, &rep->dr_txr);
-					M0_ASSERT(rc == 0);
-					m0_fom_phase_move(fom, M0_ERR(rc), M0_FOPH_FAILURE);
-					rc = m0_dtm0_send_msg(fom, DTM_PERSISTENT,
-						&req->dtr_txr.dtd_id.dti_fid,
-						&req->dtr_txr);
-					M0_ASSERT(rc == 0);
-					m0_fom_phase_move(fom, M0_ERR(rc), M0_FOPH_FAILURE);
-				}
-			}
-		}
+
 		rep->dr_rc = rc;
 		m0_fom_phase_set(fom, M0_FOPH_SUCCESS);
 		result = M0_FSO_AGAIN;
 	}
+
 	return M0_RC(result);
 }
 

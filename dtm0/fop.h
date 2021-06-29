@@ -86,7 +86,7 @@ M0_INTERNAL int m0_dtm0_on_committed(struct m0_fom            *fom,
 M0_INTERNAL int m0_dtm0_logrec_update(struct m0_be_dtm0_log  *log,
 				      struct m0_be_tx        *tx,
 				      struct m0_dtm0_tx_desc *txd,
-				      struct m0_buf          *pyld);
+				      struct m0_buf          *payload);
 /* __MOTR_DTM0_FOP_H__ */
 #endif
 
