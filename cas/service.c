@@ -23,9 +23,9 @@
 #define M0_TRACE_SUBSYSTEM M0_TRACE_SUBSYS_CAS
 #include "be/op.h"
 #include "be/tx_credit.h"
-#include "dtm0/fop.h"
-#include "dtm0/fop_xc.h"
-#include "dtm0/service.h"
+#include "be/dtm0_log.h"             /* m0_be_dtm0_log API */
+#include "dtm0/fop.h"                /* DTM0 msg and tx_desc */
+#include "dtm0/service.h"           /* m0_dtm0_service API */
 #include "lib/trace.h"
 #include "lib/memory.h"
 #include "lib/finject.h"

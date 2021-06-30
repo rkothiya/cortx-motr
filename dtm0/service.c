@@ -37,6 +37,7 @@
 #include "lib/coroutine.h"           /* m0_co API */
 #include "rpc/rpc_opcodes.h"         /* M0_DTM0_{RLINK,REQ}_OPCODE */
 #include "rpc/rpc.h"                 /* m0_rpc_item_post */
+#include "fop/fom_long_lock.h"       /* m0_long_lock */
 
 #include "conf/confc.h"   /* m0_confc */
 #include "conf/diter.h"   /* m0_conf_diter */

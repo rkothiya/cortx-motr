@@ -21,29 +21,19 @@
 
 
 #define M0_TRACE_SUBSYSTEM M0_TRACE_SUBSYS_DTM0
-#include "lib/trace.h"
-#include "addb2/addb2.h"
-#include "be/dtm0_log.h"
-#include "dtm0/addb2.h"
 #include "dtm0/fop.h"
 #include "dtm0/fop_xc.h"
-#include "dtm0/service.h"
-#include "dtm0/tx_desc.h"
-#include "dtm0/tx_desc_xc.h"
+#include "lib/trace.h"         /* M0_LOG */
+#include "be/dtm0_log.h"       /* m0_be_dtm0_log_* */
+#include "dtm0/addb2.h"
+#include "dtm0/service.h"      /* m0_dtm0_service */
 #include "lib/errno.h"
 #include "lib/assert.h"
 #include "lib/memory.h"
-#include "lib/chan.h"
-#include "lib/finject.h"
-#include "lib/time.h"
-#include "lib/misc.h"           /* M0_IN() */
-#include "fop/fop.h"
-#include "fop/fom.h"
-#include "fop/fom_generic.h"
-#include "fop/fop_item_type.h"
-#include "rpc/rpc_opcodes.h"
-#include "rpc/rpc.h"
-#include "rpc/rpclib.h"
+#include "lib/misc.h"          /* M0_IN() */
+#include "fop/fom_generic.h"   /* M0_FOPH_* */
+#include "rpc/rpc_opcodes.h"   /* M0_DTM0_REP_OPCODE */
+#include "reqh/reqh.h"         /* reqh::rh_beseg */
 
 static void dtm0_rpc_item_reply_cb(struct m0_rpc_item *item);
 
@@ -56,6 +46,11 @@ const struct m0_rpc_item_ops dtm0_req_fop_rpc_item_ops = {
 
 struct m0_fop_type dtm0_req_fop_fopt;
 struct m0_fop_type dtm0_rep_fop_fopt;
+
+/** Structure that describes DTM0 FOM that handles an incoming DTM0 message. */
+struct dtm0_fom {
+	struct m0_fom dtf_fom;
+};
 
 /*
   Fom specific routines for corresponding fops.
@@ -206,7 +201,7 @@ static int dtm0_fom_create(struct m0_fop *fop,
 	reply->dr_txr = (struct m0_dtm0_tx_desc) {};
 	reply->dr_rc = 0;
 
-	if (req->dtr_msg == DMT_EXECUTE) {
+	if (req->dtr_msg == DTM_EXECUTE) {
 		M0_ASSERT_INFO(m0_dtm0_in_ut(), "Emsg FOM is only for UTs.");
 		rc = m0_dtm0_tx_desc_copy(&req->dtr_txr, &reply->dr_txr);
 		M0_ASSERT(rc == 0);
@@ -390,7 +385,7 @@ static int dtm0_emsg_fom_tick(struct m0_fom *fom)
 	struct   m0_dtm0_service *svc = m0_dtm0_fom2service(fom);
 	const struct m0_fid      *tgt = &req->dtr_txr.dtd_id.dti_fid;
 
-	M0_PRE(req->dtr_msg == DMT_EXECUTE);
+	M0_PRE(req->dtr_msg == DTM_EXECUTE);
 	M0_ASSERT_INFO(m0_dtm0_in_ut(), "Emsg cannot be used outside of UT.");
 
 	M0_ENTRY("fom %p phase %d", fom, phase);
@@ -401,7 +396,7 @@ static int dtm0_emsg_fom_tick(struct m0_fom *fom)
 		M0_ASSERT(m0_fom_phase(fom) == M0_FOPH_DTM0_LOGGING);
 
 		if (m0_dtm0_is_a_persistent_dtm(fom->fo_service))
-			rep->dr_rc = dtm0_req_post(svc, DMT_EXECUTED,
+			rep->dr_rc = dtm0_req_post(svc, DTM_EXECUTED,
 						   &req->dtr_txr, tgt, fom);
 		m0_fom_phase_set(fom, M0_FOPH_SUCCESS);
 		result = M0_FSO_AGAIN;
