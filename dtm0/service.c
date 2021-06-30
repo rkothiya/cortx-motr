@@ -106,7 +106,7 @@ struct dtm0_process {
 	/**
 	 * Remote process endpoint
 	 */
-	const char             *dop_rep;
+	char                   *dop_rep;
 	/**
 	 * Current dtm0 service dtm0 process to.
 	 */
@@ -264,7 +264,15 @@ static int dtm0_process_disconnect(struct dtm0_process *process)
 		m0_rpc_link_disconnect_sync(&process->dop_rlink, timeout) : 0;
 
 	if (M0_IN(rc, (0, -ETIMEDOUT, -ECANCELED))) {
-		/* TODO: Fix this. We are ignoring -ECANCELED for now.*/
+		/*
+		 * XXX: At this moment there is no special call to
+		 * unconditionally terminate an RPC connection without
+		 * communication with the other side. Because of that,
+		 * we are reusing the existing ::m0_rpc_link_disconnect_sync,
+		 * but ignoring the cases where the counterpart is
+		 * dead (timed out) or has already disconnected
+		 * from us (canceled).
+		 */
 		if (rc == -ETIMEDOUT || rc == -ECANCELED) {
 			M0_LOG(M0_WARN, "Disconnect %s (suppressed)",
 			       rc == -ETIMEDOUT ? "timed out" : "cancelled");
@@ -491,8 +499,8 @@ struct drlink_fom {
 static struct drlink_fom *fom2drlink_fom(struct m0_fom *fom)
 {
 	struct drlink_fom *df;
-	df = M0_AMB(df, fom, df_gen);
-	return df;
+	M0_PRE(fom != NULL);
+	return M0_AMB(df, fom, df_gen);
 }
 
 static size_t drlink_fom_locality(const struct m0_fom *fom)
@@ -532,7 +540,7 @@ static void m0_dtm0_rpc_link_mod_fini(void)
 {
 }
 
-/* creates a deep copy of the given request */
+/* Create a deep copy of the given request. */
 static struct dtm0_req_fop *dtm0_req_fop_dup(const struct dtm0_req_fop *src)
 {
 	int                  rc;
@@ -594,7 +602,7 @@ static int drlink_fom_init(struct drlink_fom            *fom,
 	/*
 	 * When ACK is not required, the FOM may be released before
 	 * the received callback is triggered.
-	 * See ::dtm0_rlink_rpc_item_reply_cb.
+	 * See ^1 in ::dtm0_rlink_rpc_item_reply_cb.
 	 */
 	fop->f_opaque = wait_for_ack ? fom : NULL;
 
@@ -622,12 +630,13 @@ static void drlink_fom_fini(struct m0_fom *fom)
 	m0_fop_put_lock(df->df_rfop);
 	m0_co_op_fini(&df->df_co_op);
 	m0_fom_fini(fom);
+	m0_free(fom);
 }
 
-static void co_long_write_lock(struct m0_co_context *context,
-			       struct m0_long_lock *lk,
+static void co_long_write_lock(struct m0_co_context     *context,
+			       struct m0_long_lock      *lk,
 			       struct m0_long_lock_link *link,
-			       int next_phase)
+			       int                       next_phase)
 {
 	int outcome;
 	M0_CO_REENTER(context);
@@ -637,9 +646,9 @@ static void co_long_write_lock(struct m0_co_context *context,
 }
 
 static void co_rpc_link_connect(struct m0_co_context *context,
-				struct m0_rpc_link *rlink,
-				struct m0_fom *fom,
-				int next_phase)
+				struct m0_rpc_link   *rlink,
+				struct m0_fom        *fom,
+				int                   next_phase)
 {
 	M0_CO_REENTER(context);
 
@@ -663,8 +672,8 @@ static int dtm0_process_init(struct dtm0_process    *proc,
 	struct m0_reqh         *reqh;
 	struct m0_conf_cache   *cache;
 
-	/* TODO: M0_PRE dtms is locked */
-	M0_ENTRY();
+	M0_ENTRY("proc=%p, dtms=%p, rem=" FID_F, proc, dtms,
+		 FID_P(rem_svc_fid));
 
 	reqh = dtms->dos_generic.rs_reqh;
 	cache = &m0_reqh2confc(reqh)->cc_cache;
@@ -672,14 +681,14 @@ static int dtm0_process_init(struct dtm0_process    *proc,
 	obj = m0_conf_cache_lookup(cache, rem_svc_fid);
 	if (obj == NULL)
 		return M0_ERR_INFO(-ENOENT,
-				   "Cannot find svc in the conf cache.");
+				   "Cannot find svc" FID_F
+				   " in the conf cache.", FID_P(rem_svc_fid));
 	rem_svc_conf = M0_CONF_CAST(obj, m0_conf_service);
 	obj = m0_conf_obj_grandparent(obj);
-	if (obj == NULL)
-		return M0_ERR_INFO(-ENOENT,
-				   "Cannot find proc in the conf cache.");
-	rem_proc_conf = M0_CONF_CAST(obj, m0_conf_process);
+	M0_ASSERT_INFO(obj != NULL, "Service " FID_F " does not belong to "
+		       "any process?", FID_P(rem_svc_fid));
 
+	rem_proc_conf = M0_CONF_CAST(obj, m0_conf_process);
 	if (rem_svc_conf->cs_type != M0_CST_DTM0)
 		return M0_ERR_INFO(-ENOENT, "Not a DTM0 service.");
 
@@ -700,20 +709,21 @@ static int dtm0_process_init(struct dtm0_process    *proc,
 static void dtm0_process_fini(struct dtm0_process *proc)
 {
 	dopr_tlink_fini(proc);
+	m0_free(proc->dop_rep);
 	m0_long_lock_fini(&proc->dop_llock);
 }
 
 static void dtm0_service_conns_term(struct m0_dtm0_service *service)
 {
-	struct dtm0_process    *process;
-	int                     rc;
+	struct dtm0_process *process;
+	int                  rc;
 
 	M0_ENTRY("dtms=%p", service);
 
 	while ((process = dopr_tlist_pop(&service->dos_processes)) != NULL) {
 		rc = dtm0_process_disconnect(process);
-		M0_ASSERT_INFO(rc == 0, "TODO: Disconnect failures"
-			       " are not handled yet.");
+		M0_ASSERT_INFO(rc == 0, "Failed to disconnect from %p?",
+			       process);
 		dtm0_process_fini(process);
 		m0_free(process);
 	}
@@ -732,23 +742,19 @@ static int find_or_add(struct m0_dtm0_service *dtms,
 	M0_PRE(m0_mutex_is_locked(&dtms->dos_generic.rs_mutex));
 
 	process = dtm0_service_process__lookup(&dtms->dos_generic, tgt);
-	if (process != NULL) {
+	if (process == NULL) {
+		rc = M0_ALLOC_PTR(process) == NULL ?
+			M0_ERR(-ENOMEM) :
+			dtm0_process_init(process, dtms, tgt);
+		if (rc != 0)
+			m0_free(process);
+	}
+
+	if (rc == 0) {
+		M0_POST(process != NULL);
 		*out = process;
-		return M0_RC(0);
 	}
-
-	M0_ALLOC_PTR(process);
-	if (process == NULL)
-		return M0_ERR(-ENOMEM);
-
-	rc = dtm0_process_init(process, dtms, tgt);
-	if (rc != 0) {
-		m0_free(process);
-		return M0_ERR(rc);
-	}
-
-	*out = process;
-	return M0_RC(0);
+	return M0_RC(rc);
 }
 
 enum drlink_fom_state {
@@ -820,14 +826,14 @@ static void dtm0_rlink_rpc_item_reply_cb(struct m0_rpc_item *item)
 	M0_ENTRY("item=%p", item);
 
 	M0_PRE(item != NULL);
-	M0_PRE(M0_IN(m0_fop_opcode(m0_rpc_item_to_fop(item)),
-		     (M0_DTM0_REQ_OPCODE)));
+	M0_PRE(m0_fop_opcode(m0_rpc_item_to_fop(item)) == M0_DTM0_REQ_OPCODE);
 
 	if (m0_rpc_item_error(item) == 0) {
 		reply = m0_rpc_item_to_fop(item->ri_reply);
-		M0_ASSERT(M0_IN(m0_fop_opcode(reply), (M0_DTM0_REP_OPCODE)));
+		M0_ASSERT(m0_fop_opcode(reply) == M0_DTM0_REP_OPCODE);
 	}
 
+	/* ^1: df is NULL if we do not need to wait for the reply. */
 	if (df != NULL)
 		m0_co_op_done(&df->df_co_op);
 
@@ -883,7 +889,9 @@ enum dpr_state {
 
 static enum dpr_state dpr_state_infer(struct dtm0_process *proc)
 {
-	/* TODO: Observe the states of
+	/*
+	 * TODO:
+	 * Observe the states of the following enitities:
 	 *	RPC connection
 	 *	RPC session
 	 *	Conf obj
@@ -906,7 +914,7 @@ static enum dpr_state dpr_state_infer(struct dtm0_process *proc)
 }
 
 /*
- * Establish a relation between a DTM message (carried by the RPC item),
+ * Establish a relation between a DTM message (carried by an RPC item),
  * and a DTM RPC link FOM that was used to send this message:
  *   DRLINK FOM <-> RPC item.
  */
@@ -945,7 +953,12 @@ static void drlink_coro_fom_tick(struct m0_co_context *context)
 
 	m0_mutex_lock(&drf->df_svc->dos_generic.rs_mutex);
 	rc = find_or_add(drf->df_svc, &drf->df_tgt, &F(proc));
-	/* Safety: assume that processes cannot be evicted. */
+	/*
+	 * Safety: it is safe to release the lock right here because
+	 * ::dtm0_service_conns_term is supposed to be called only
+	 * after all drlink FOMs have reached DRF_DONE state.
+	 * There are no other places where processes get removed from the list.
+	 */
 	m0_mutex_unlock(&drf->df_svc->dos_generic.rs_mutex);
 
 	if (rc != 0)
@@ -997,6 +1010,7 @@ out:
 
 	m0_fom_phase_set(fom, DRF_DONE);
 }
+#undef F
 
 static int drlink_fom_tick(struct m0_fom *fom)
 {
@@ -1017,22 +1031,21 @@ M0_INTERNAL int m0_dtm0_req_post(struct m0_dtm0_service    *svc,
 
 	M0_ENTRY();
 
-	M0_ALLOC_PTR(fom);
-	if (fom == NULL)
-		return M0_ERR(-ENOMEM);
+	rc = M0_ALLOC_PTR(fom) == NULL ?
+		M0_ERR(-ENOMEM) :
+		drlink_fom_init(fom, svc, tgt, req, parent_fom, wait_for_ack);
 
-	rc = drlink_fom_init(fom, svc, tgt, req, parent_fom, wait_for_ack);
-	if (rc != 0) {
+	if (rc == 0)
+		m0_fom_queue(&fom->df_gen);
+	else
 		m0_free(fom);
-		return M0_ERR(rc);
-	}
-
-	m0_fom_queue(&fom->df_gen);
 
 	return M0_RC(rc);
 }
 
 #else /* !defined(__KERNEL__) */
+/* On-demand RPC link stubs for kernel builds. */
+
 static int m0_dtm0_rpc_link_mod_init(void)
 {
 	M0_IMPOSSIBLE();
@@ -1048,7 +1061,7 @@ M0_INTERNAL int m0_dtm0_req_post(struct m0_dtm0_service    *svc,
 				 const struct dtm0_req_fop *req,
 				 const struct m0_fid       *tgt,
 				 const struct m0_fom       *parent_fom,
-				 bool                       sync)
+				 bool                       wait_for_ack)
 {
 	(void) svc;
 	(void) req;
@@ -1060,6 +1073,7 @@ M0_INTERNAL int m0_dtm0_req_post(struct m0_dtm0_service    *svc,
 static void dtm0_service_conns_term(struct m0_dtm0_service *service)
 {
 	(void) service;
+	M0_IMPOSSIBLE();
 }
 
 

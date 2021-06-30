@@ -237,18 +237,18 @@ static size_t dtm0_fom_locality(const struct m0_fom *fom)
 	return locality++;
 }
 
-static int m0_dtm0_send_msg(struct m0_fom                *fom,
-			    enum m0_dtm0s_msg             msg_type,
-			    const struct m0_fid          *tgt,
-			    const struct m0_dtm0_tx_desc *txd)
+static int dtm0_req_post(struct m0_dtm0_service       *dtms,
+			 enum m0_dtm0s_msg             msg_type,
+			 const struct m0_dtm0_tx_desc *txd,
+			 const struct m0_fid          *tgt,
+			 struct m0_fom                *fom)
 {
-	struct m0_dtm0_service *dtms;
-	struct dtm0_req_fop req = {
-		.dtr_msg = msg_type,
-		.dtr_txr = *txd,
-	};
-	dtms = m0_dtm0_service_find(fom->fo_service->rs_reqh);
-	return m0_dtm0_req_post(dtms, &req, tgt, fom, false);
+	return m0_dtm0_req_post(dtms,
+				&((struct dtm0_req_fop) {
+				  .dtr_msg = msg_type,
+				  .dtr_txr = *txd
+				  }),
+				tgt, fom, false);
 }
 
 M0_INTERNAL int m0_dtm0_logrec_update(struct m0_be_dtm0_log  *log,
@@ -303,7 +303,7 @@ M0_INTERNAL int m0_dtm0_on_committed(struct m0_fom            *fom,
 		if (m0_fid_eq(target, source))
 			target = &txd.dtd_id.dti_fid;
 
-		rc = m0_dtm0_send_msg(fom, DTM_PERSISTENT, target, &txd);
+		rc = dtm0_req_post(dtms, DTM_PERSISTENT, &txd, target, fom);
 		if (rc != 0) {
 			M0_ERR_INFO(rc, "Failed to send PERSISTENT msg "
 				    FID_F " -> " FID_F ".",
@@ -324,7 +324,7 @@ out:
 
 static int dtm0_pmsg_fom_tick(struct m0_fom *fom)
 {
-	int                       result = M0_FSO_AGAIN;
+	int                       result;
 	struct   m0_dtm0_service *svc;
 	struct   m0_buf           buf = {};
 	struct   dtm0_rep_fop    *rep;
@@ -360,10 +360,10 @@ static int dtm0_pmsg_fom_tick(struct m0_fom *fom)
 
 		if (m0_dtm0_is_a_volatile_dtm(fom->fo_service)) {
 			/*
-			 * On the client side, DTX is the owner of the log,
-			 * so that it cannot be modifed right here. We have to
-			 * post an AST to ensure DTX is modifed
-			 * under the group lock held.
+			 * On the client side, DTX is the owner of the
+			 * corresponding log record, so that it cannot be
+			 * modifed right here. We have to post an AST
+			 * to ensure DTX is modifed under the group lock held.
 			 */
 			m0_be_dtm0_log_pmsg_post(svc->dos_log, fom->fo_fop);
 			rep->dr_rc = 0;
@@ -383,11 +383,12 @@ static int dtm0_pmsg_fom_tick(struct m0_fom *fom)
 
 static int dtm0_emsg_fom_tick(struct m0_fom *fom)
 {
-	int                       rc = 0;
-	int                       result = M0_FSO_AGAIN;
+	int                       result;
 	struct   dtm0_rep_fop    *rep = m0_fop_data(fom->fo_rep_fop);
 	struct   dtm0_req_fop    *req = m0_fop_data(fom->fo_fop);
 	int                       phase = m0_fom_phase(fom);
+	struct   m0_dtm0_service *svc = m0_dtm0_fom2service(fom);
+	const struct m0_fid      *tgt = &req->dtr_txr.dtd_id.dti_fid;
 
 	M0_PRE(req->dtr_msg == DMT_EXECUTE);
 	M0_ASSERT_INFO(m0_dtm0_in_ut(), "Emsg cannot be used outside of UT.");
@@ -400,11 +401,8 @@ static int dtm0_emsg_fom_tick(struct m0_fom *fom)
 		M0_ASSERT(m0_fom_phase(fom) == M0_FOPH_DTM0_LOGGING);
 
 		if (m0_dtm0_is_a_persistent_dtm(fom->fo_service))
-			rc = m0_dtm0_send_msg(fom, DMT_EXECUTED,
-					      &req->dtr_txr.dtd_id.dti_fid,
-					      &req->dtr_txr);
-
-		rep->dr_rc = rc;
+			rep->dr_rc = dtm0_req_post(svc, DMT_EXECUTED,
+						   &req->dtr_txr, tgt, fom);
 		m0_fom_phase_set(fom, M0_FOPH_SUCCESS);
 		result = M0_FSO_AGAIN;
 	}

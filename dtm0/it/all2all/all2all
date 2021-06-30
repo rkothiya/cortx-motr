@@ -121,8 +121,6 @@ function ha_msg_send_cli_online()
     done
 }
 
-# FIXME: this thing is not in use but it is quite useful.
-# Figure out where to put it.
 function expected_trace_lines_num()
 {
     local pattern="$1"

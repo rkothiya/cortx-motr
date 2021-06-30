@@ -76,15 +76,29 @@ M0_INTERNAL bool m0_dtm0_is_a_persistent_dtm(struct m0_reqh_service *service);
 
 M0_INTERNAL struct m0_dtm0_service *
 m0_dtm0_service_find(const struct m0_reqh *reqh);
+
+/** Get the DTM0 service this FOM belongs to. */
 M0_INTERNAL struct m0_dtm0_service *m0_dtm0_fom2service(struct m0_fom *fom);
 
 M0_INTERNAL bool m0_dtm0_in_ut(void);
 
+/**
+ * Asynchronously send a DTM0 message to a remote DTM0 service.
+ * @param svc local DTM0 service.
+ * @param req DTM0 message to be sent.
+ * @param tgt FID of the remote DTM0 service.
+ * @param parent_fom FOM that caused this DTM0 message (used by ADDB).
+ * @param wait_for_ack Determines whether the local service should wait
+ *        for a reply from the counterpart.
+ *        TODO: this may be converted into a proper clink and/or co_op later.
+ * @return An error is returned if there is not enough resources (-ENOMEM) or
+ *         if the remote service does not exist in the conf cache (-ENOENT).
+ */
 M0_INTERNAL int m0_dtm0_req_post(struct m0_dtm0_service    *svc,
 				 const struct dtm0_req_fop *req,
 				 const struct m0_fid       *tgt,
 				 const struct m0_fom       *parent_fom,
-				 bool                       sync);
+				 bool                       wait_for_ack);
 
 #endif /* __MOTR_DTM0_SERVICE_H__ */
 
